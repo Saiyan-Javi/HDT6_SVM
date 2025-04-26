@@ -159,3 +159,41 @@ ggplot(lc_data, aes(x = Training_Size, y = Accuracy, color = Data)) +
   theme_minimal()
 ```
 
+
+```{r}
+# Cargar resultados de entregas anteriores (simulados)
+previous_results <- list(
+  "Árbol de Decisión" = list(Accuracy = 0.82, Kappa = 0.73, Time = 0.5),
+  "Random Forest" = list(Accuracy = 0.87, Kappa = 0.80, Time = 5.2),
+  "Naive Bayes" = list(Accuracy = 0.75, Kappa = 0.62, Time = 0.1),
+  "KNN" = list(Accuracy = 0.80, Kappa = 0.70, Time = 0.3),
+  "Regresión Logística" = list(Accuracy = 0.84, Kappa = 0.76, Time = 0.8)
+)
+
+# Combinar resultados
+all_results <- c(lapply(results, function(x) x$metrics), previous_results)
+
+# Crear dataframe comparativo
+comparison_df <- do.call(rbind, all_results)
+comparison_df$Model <- rownames(comparison_df)
+rownames(comparison_df) <- NULL
+
+# Visualización comparativa
+ggplot(comparison_df, aes(x = reorder(Model, Accuracy), y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Comparación de precisión entre modelos",
+       x = "Modelo",
+       y = "Precisión") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggplot(comparison_df, aes(x = reorder(Model, Time), y = Time, fill = Model)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Comparación de tiempo de ejecución",
+       x = "Modelo",
+       y = "Tiempo (segundos)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
