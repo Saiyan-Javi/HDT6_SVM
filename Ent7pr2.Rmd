@@ -134,8 +134,28 @@ for (name in names(results)) {
 
 
 ```{r}
+# Curvas de aprendizaje para el mejor modelo
+best_model <- results[[which.max(sapply(results, function(x) x$metrics$Accuracy))]]
 
+learning_curve <- function(model, data, y, train_sizes = seq(0.1, 1, 0.1), cv = 5) {
+  ctrl <- trainControl(method = "cv", number = cv)
+  lc <- learing_curve_dat(dat = cbind(data, Class = y),
+                         outcome = "Class",
+                         test_prop = 1 - min(train_sizes),
+                         method = model$method,
+                         metric = "Accuracy",
+                         trControl = ctrl,
+                         tuneGrid = model$bestTune)
+  return(lc)
+}
+
+lc_data <- learning_curve(best_model, X_train_scaled, y_train)
+
+ggplot(lc_data, aes(x = Training_Size, y = Accuracy, color = Data)) +
+  geom_smooth(method = "loess") +
+  labs(title = "Curva de aprendizaje del mejor modelo SVM",
+       x = "Tamaño del conjunto de entrenamiento",
+       y = "Precisión") +
+  theme_minimal()
 ```
-
-
 
