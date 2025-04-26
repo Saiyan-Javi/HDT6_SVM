@@ -58,10 +58,84 @@ print(prop.table(table(y_train)))
 
 
 ```{r}
+# Configuración común para todos los modelos
+ctrl <- trainControl(method = "cv", number = 5, savePredictions = TRUE)
 
+# a) SVM Lineal
+set.seed(42)
+svm_linear <- train(x = X_train_scaled, y = y_train,
+                   method = "svmLinear",
+                   trControl = ctrl,
+                   tuneLength = 5)
+
+# b) SVM Radial (RBF)
+set.seed(42)
+svm_radial <- train(x = X_train_scaled, y = y_train,
+                   method = "svmRadial",
+                   trControl = ctrl,
+                   tuneLength = 5)
+
+# c) SVM Polinomial
+set.seed(42)
+svm_poly <- train(x = X_train_scaled, y = y_train,
+                 method = "svmPoly",
+                 trControl = ctrl,
+                 tuneLength = 3)
+
+# d) SVM con búsqueda en grilla más exhaustiva (versión corregida para svmPoly)
+grid <- expand.grid(degree = c(2, 3, 4),  # Grado del polinomio
+                   scale = c(0.01, 0.1, 1),  # Parámetro de escala
+                   C = c(0.1, 1, 10, 100))  # Parámetro de costo
+
+set.seed(42)
+svm_tuned <- train(x = X_train_scaled, y = y_train,
+                  method = "svmPoly",
+                  trControl = ctrl,
+                  tuneGrid = grid)
 ```
 
 
+```{r}
+# Lista de modelos
+models <- list(
+  "SVM Lineal" = svm_linear,
+  "SVM Radial" = svm_radial,
+  "SVM Polinomial" = svm_poly,
+  "SVM Tuneado" = svm_tuned
+)
+
+# Función para evaluar modelos
+evaluate_model <- function(model, test_data, test_y) {
+  start_time <- Sys.time()
+  pred <- predict(model, test_data)
+  time_taken <- Sys.time() - start_time
+  
+  cm <- confusionMatrix(pred, test_y)
+  metrics <- data.frame(
+    Accuracy = cm$overall["Accuracy"],
+    Kappa = cm$overall["Kappa"],
+    Time = as.numeric(time_taken)
+  )
+  
+  return(list(metrics = metrics, cm = cm))
+}
+
+# Evaluar todos los modelos
+results <- lapply(models, evaluate_model, X_test_scaled, y_test)
+
+# Mostrar resultados
+for (name in names(results)) {
+  cat("\nModelo:", name, "\n")
+  print(results[[name]]$metrics)
+  cat("\nMatriz de confusión:\n")
+  print(results[[name]]$cm$table)
+}
+```
+
+
+```{r}
+
+```
 
 
 
