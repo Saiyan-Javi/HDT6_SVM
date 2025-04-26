@@ -197,3 +197,55 @@ ggplot(comparison_df, aes(x = reorder(Model, Time), y = Time, fill = Model)) +
   theme_minimal() +
   theme(legend.position = "none")
 ```
+
+```{r}
+# Preparar datos para regresión
+y_reg <- data$SalePrice
+X_train_reg <- X_train
+X_test_reg <- X_test
+
+# Escalado
+preProc_reg <- preProcess(X_train_reg, method = c("center", "scale"))
+X_train_reg_scaled <- predict(preProc_reg, X_train_reg)
+X_test_reg_scaled <- predict(preProc_reg, X_test_reg)
+
+# Configuración para regresión
+ctrl_reg <- trainControl(method = "cv", number = 5)
+
+# Modelo SVR con tuneado
+set.seed(42)
+svr_grid <- expand.grid(
+  C = c(0.1, 1, 10, 100),
+  sigma = c(0.01, 0.1, 1)
+)
+
+svr_model <- train(
+  x = X_train_reg_scaled,
+  y = y_reg[trainIndex],
+  method = "svmRadial",
+  trControl = ctrl_reg,
+  tuneGrid = svr_grid,
+  metric = "RMSE"
+)
+
+# Evaluación
+y_pred_reg <- predict(svr_model, X_test_reg_scaled)
+reg_metrics <- postResample(y_pred_reg, y_reg[-trainIndex])
+
+cat("\nMétricas de regresión:\n")
+print(reg_metrics)
+
+# Visualización de resultados real vs predicho
+results_df <- data.frame(
+  Real = y_reg[-trainIndex],
+  Predicho = y_pred_reg
+)
+
+ggplot(results_df, aes(x = Real, y = Predicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(title = "Resultados reales vs predichos - SVR",
+       x = "Precio real",
+       y = "Precio predicho") +
+ theme_minimal()
+```
