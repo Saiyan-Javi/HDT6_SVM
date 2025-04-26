@@ -1,0 +1,54 @@
+---
+title: "Ent6Pr2"
+author: "Javier Chiquín, Ricardo Morales"
+date: "2025-04-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Cargar librerías necesarias
+library(caret)
+library(e1071)
+library(ggplot2)
+library(dplyr)
+
+# Cargar datos
+data <- read.csv("C:\\Users\\javie\\Documents\\UVG\\Cuarto año\\Primer Semestre\\Mineria\\train.csv")
+
+# Crear categorías de precio (consistentes con entregas anteriores)
+set.seed(42) # Para reproducibilidad
+percentiles <- quantile(data$SalePrice, probs = c(0.33, 0.66))
+data$Price_Category <- cut(data$SalePrice,
+                          breaks = c(-Inf, percentiles[1], percentiles[2], Inf),
+                          labels = c('Economica', 'Media', 'Cara'))
+
+# Selección de características (consistentes con entregas anteriores)
+features <- c('GrLivArea', 'OverallQual', 'TotalBsmtSF', 'GarageCars', 'FullBath', 'YearBuilt')
+X <- data[, features]
+y <- data$Price_Category
+
+# Crear particiones train-test (70-30) - MISMAS que en entregas anteriores
+set.seed(42)
+trainIndex <- createDataPartition(y, p = 0.7, list = FALSE)
+X_train <- X[trainIndex, ]
+X_test <- X[-trainIndex, ]
+y_train <- y[trainIndex]
+y_test <- y[-trainIndex]
+
+```
+
+
+
+
+
+
+
+
+
+
+
