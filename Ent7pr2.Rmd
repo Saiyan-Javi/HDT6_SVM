@@ -44,9 +44,22 @@ y_test <- y[-trainIndex]
 
 
 
+```{r}
+# Escalado de características (crucial para SVM)
+preProc <- preProcess(X_train, method = c("center", "scale"))
+X_train_scaled <- predict(preProc, X_train)
+X_test_scaled <- predict(preProc, X_test)
+
+# Verificar balance de clases
+cat("\nDistribución de clases en entrenamiento:\n")
+print(prop.table(table(y_train)))
+```
 
 
 
+```{r}
+
+```
 
 
 
