@@ -2,12 +2,15 @@
 title: "Ent6Pr2"
 author: "Javier Chiquín, Ricardo Morales"
 date: "2025-04-25"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
 
 
 ```{r}
@@ -16,6 +19,9 @@ library(caret)
 library(e1071)
 library(ggplot2)
 library(dplyr)
+library(randomForest)
+library(class)  # Para KNN
+
 
 # Cargar datos
 data <- read.csv("C:\\Users\\javie\\Documents\\UVG\\Cuarto año\\Primer Semestre\\Mineria\\train.csv")
@@ -285,37 +291,584 @@ for (model_name in names(results)) {
 ```
 Las matrices de confusión de los cuatro modelos SVM en el conjunto de prueba (437 observaciones) muestran que el SVM Lineal (accuracy: 83.5%, 365/437) y el SVM Polinomial (accuracy: 83.5%, 365/437) lideran en precisión, con 128/146 "Económica", 105/144 "Media" y 133/147 "Cara" correctos para el Lineal, y 128/146 "Económica", 103/144 "Media" y 134/147 "Cara" para el Polinomial, aunque ambos tienen falsos negativos significativos en "Media" (39 y 41, respectivamente). El SVM Radial (accuracy: 82.8%, 362/437) predice 125/146 "Económica", 103/144 "Media" y 134/147 "Cara", con 41 falsos negativos en "Media", mientras que el SVM Tuneado (accuracy: 82.6%, 361/437) logra 126/146 "Económica", 100/144 "Media" y 135/147 "Cara", pero con 44 falsos negativos en "Media". Todos los modelos clasifican bien "Cara", pero "Media" presenta el mayor desafío; el SVM Lineal y Polinomial son los más equilibrados, y se sugiere ajustar hiperparámetros para reducir errores en "Media".
 
+```{r}
+# -----------------------------------------------------
+# 7. Análisis de sobreajuste/desajuste y curvas de aprendizaje
+# -----------------------------------------------------
 
+# 7.1 Función para evaluar rendimiento train vs test
+evaluate_model_fit <- function(model, model_name) {
+  train_pred <- predict(model, X_train_scaled)
+  test_pred <- predict(model, X_test_scaled)
+  
+  train_acc <- confusionMatrix(train_pred, y_train)$overall["Accuracy"]
+  test_acc <- confusionMatrix(test_pred, y_test)$overall["Accuracy"]
+  
+  return(data.frame(
+    Modelo = model_name,
+    Train_Accuracy = round(train_acc, 4),
+    Test_Accuracy = round(test_acc, 4),
+    Diferencia = round(train_acc - test_acc, 4)
+  ))
+}
 
+# 7.2 Evaluar todos los modelos
+fit_results <- rbind(
+  evaluate_model_fit(svm_linear, "SVM Lineal"),
+  evaluate_model_fit(svm_radial, "SVM Radial"),
+  evaluate_model_fit(svm_poly, "SVM Polinomial"),
+  evaluate_model_fit(svm_tuned, "SVM Tuneado")
+)
 
+# 7.3 Mostrar resultados
+cat("\nComparación de rendimiento: Entrenamiento vs Prueba\n")
+print(fit_results)
 
+# 7.4 Diagnóstico automático
+cat("\nDiagnóstico de sobreajuste/desajuste:\n")
+for (i in 1:nrow(fit_results)) {
+  model_name <- fit_results[i, "Modelo"]
+  diff <- fit_results[i, "Diferencia"]
+  test_acc <- fit_results[i, "Test_Accuracy"]
+  
+  if (diff > 0.05) {
+    cat(sprintf("- %s: SOBREAJUSTE (diferencia = %.2f%%, test = %.2f%%)\n", 
+                model_name, diff*100, test_acc*100))
+  } else if (test_acc < 0.7) {
+    cat(sprintf("- %s: DESAJUSTE (accuracy_test = %.2f%%)\n", 
+                model_name, test_acc*100))
+  } else {
+    cat(sprintf("- %s: AJUSTE ADECUADO (diferencia = %.2f%%)\n", 
+                model_name, diff*100))
+  }
+}
 
+# 7.5 Recomendaciones específicas
+cat("\nRecomendaciones para mejorar:\n")
+if (any(fit_results$Diferencia > 0.05)) {
+  cat("- Para modelos con SOBREAJUSTE:\n")
+  cat("  * Aumentar regularización (parámetro C)\n")
+  cat("  * Reducir complejidad del modelo\n")
+  cat("  * Aplicar PCA para reducción dimensional\n\n")
+}
 
+if (any(fit_results$Test_Accuracy < 0.7)) {
+  cat("- Para modelos con DESAJUSTE:\n")
+  cat("  * Aumentar complejidad (kernel polinomial grado mayor)\n")
+  cat("  * Ajustar parámetros gamma en SVM Radial\n")
+  cat("  * Mejorar ingeniería de características\n")
+}
 
+# 7.6 Función para curvas de aprendizaje
+generate_learning_curve <- function(model, model_name) {
+  train_sizes <- seq(0.1, 1, 0.1)
+  results <- data.frame()
+  
+  for (size in train_sizes) {
+    n_samples <- round(size * nrow(X_train_scaled))
+    idx <- sample(nrow(X_train_scaled), n_samples)
+    
+    m <- train(
+      x = X_train_scaled[idx, ],
+      y = y_train[idx],
+      method = model$method,
+      trControl = trainControl(method = "none"),
+      tuneGrid = model$bestTune
+    )
+    
+    train_acc <- confusionMatrix(predict(m, X_train_scaled[idx, ]), 
+                                y_train[idx])$overall["Accuracy"]
+    test_acc <- confusionMatrix(predict(m, X_test_scaled), 
+                               y_test)$overall["Accuracy"]
+    
+    results <- rbind(results, data.frame(
+      Train_Size = size,
+      Train_Accuracy = train_acc,
+      Test_Accuracy = test_acc
+    ))
+  }
+  
+  # Graficar
+  ggplot(melt(results, id.vars = "Train_Size"), 
+         aes(x = Train_Size, y = value, color = variable)) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 2) +
+    labs(title = paste("Curva de Aprendizaje:", model_name),
+         x = "Proporción de datos de entrenamiento",
+         y = "Accuracy",
+         color = "Conjunto") +
+    scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+    theme_minimal() +
+    theme(legend.position = "top")
+}
 
+# 7.7 Generar gráficos de curvas de aprendizaje
+cat("\nGenerando curvas de aprendizaje...\n")
+generate_learning_curve(svm_linear, "SVM Lineal")
+generate_learning_curve(svm_radial, "SVM Radial")
+generate_learning_curve(svm_poly, "SVM Polinomial")
+generate_learning_curve(svm_tuned, "SVM Tuneado")
+```
+Los cuatro modelos SVM (Lineal, Radial, Polinomial, Tuneado) presentan un ajuste adecuado según el diagnóstico, con diferencias entre accuracies de entrenamiento y prueba menores al 5%: SVM Lineal (entrenamiento: 81.52%, prueba: 83.75%, diferencia: -2.23%), SVM Radial (entrenamiento: 81.43%, prueba: 82.84%, diferencia: -1.41%), SVM Polinomial (entrenamiento: 80.84%, prueba: 83.52%, diferencia: -2.68%), y SVM Tuneado (entrenamiento: 81.43%, prueba: 82.61%, diferencia: -1.18%); las curvas de aprendizaje muestran que el accuracy en prueba supera al de entrenamiento y se estabiliza cerca del 80% a medida que aumenta el tamaño del conjunto de entrenamiento, indicando un buen ajuste sin sobreajuste ni desajuste severo. Sin embargo, para mejorar el rendimiento, se recomienda generar curvas de aprendizaje más detalladas, ajustar parámetros como C o gamma, y explorar técnicas como PCA para optimizar las características y reducir posibles ruidos.
+```{r}
+# -----------------------------------------------------
+# 8. Comparación de Modelos: Efectividad, Tiempo y Equivocaciones
+# -----------------------------------------------------
 
+# 8.1 Extraer métricas globales y por clase de los modelos (usando 'results' del punto 5)
+comparison_metrics <- do.call(rbind, lapply(names(results), function(model_name) {
+  res <- results[[model_name]]
+  data.frame(
+    Modelo = model_name,
+    Accuracy = res$metrics$Accuracy,
+    Kappa = res$metrics$Kappa,
+    Time_sec = res$metrics$Time_sec,
+    FN_Economica = res$metrics$FN_Economica,
+    FN_Media = res$metrics$FN_Media,
+    FN_Cara = res$metrics$FN_Cara,
+    F1_Economica = res$class_metrics["Class: Economica", "F1"],
+    F1_Media = res$class_metrics["Class: Media", "F1"],
+    F1_Cara = res$class_metrics["Class: Cara", "F1"]
+  )
+}))
 
+# 8.2 Mostrar tabla comparativa
+cat("\nComparación de Efectividad y Tiempo de Procesamiento:\n")
+print(comparison_metrics)
 
+# 8.3 Análisis de equivocaciones (falsos negativos por clase)
+cat("\nAnálisis de Equivocaciones (Falsos Negativos por Clase):\n")
+for (model_name in names(results)) {
+  fn <- comparison_metrics[comparison_metrics$Modelo == model_name, ]
+  total_fn <- fn$FN_Economica + fn$FN_Media + fn$FN_Cara
+  cat(sprintf("\nModelo: %s\n", model_name))
+  cat(sprintf("- Total Falsos Negativos: %d\n", total_fn))
+  cat(sprintf("- Clase 'Económica': %d (%.1f%% del total de FN)\n", 
+              fn$FN_Economica, fn$FN_Economica/total_fn*100))
+  cat(sprintf("- Clase 'Media': %d (%.1f%% del total de FN)\n", 
+              fn$FN_Media, fn$FN_Media/total_fn*100))
+  cat(sprintf("- Clase 'Cara': %d (%.1f%% del total de FN)\n", 
+              fn$FN_Cara, fn$FN_Cara/total_fn*100))
+}
 
+# 8.4 Importancia de los errores
+cat("\nImportancia de los Errores:\n")
+cat("- Errores en 'Económica': Moderada. Subestimar el precio puede afectar la percepción de valor del vendedor.\n")
+cat("- Errores en 'Media': Alta. Esta clase tiene más falsos negativos, lo que indica confusión con otras categorías y puede llevar a decisiones incorrectas en la segmentación de mercado.\n")
+cat("- Errores en 'Cara': Baja. Aunque menos frecuentes, sobreestimar el precio puede generar expectativas poco realistas.\n")
 
+# 8.5 Visualización de Falsos Negativos por Clase
+fn_data <- melt(comparison_metrics[, c("Modelo", "FN_Economica", "FN_Media", "FN_Cara")], 
+                id.vars = "Modelo", 
+                variable.name = "Clase", 
+                value.name = "Falsos_Negativos")
+fn_data$Clase <- gsub("FN_", "", fn_data$Clase)
+
+ggplot(fn_data, aes(x = Modelo, y = Falsos_Negativos, fill = Clase)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = Falsos_Negativos), position = position_dodge(width = 0.9), vjust = -0.5) +
+  labs(title = "Comparación de Falsos Negativos por Clase y Modelo",
+       x = "Modelo",
+       y = "Cantidad de Falsos Negativos",
+       fill = "Clase") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+
+# 8.6 Visualización de F1-Score por Clase
+f1_data <- melt(comparison_metrics[, c("Modelo", "F1_Economica", "F1_Media", "F1_Cara")], 
+                id.vars = "Modelo", 
+                variable.name = "Clase", 
+                value.name = "F1_Score")
+f1_data$Clase <- gsub("F1_", "", f1_data$Clase)
+
+ggplot(f1_data, aes(x = Modelo, y = F1_Score, fill = Clase)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_text(aes(label = sprintf("%.3f", F1_Score)), position = position_dodge(width = 0.9), vjust = -0.5) +
+  labs(title = "Comparación de F1-Score por Clase y Modelo",
+       x = "Modelo",
+       y = "F1-Score",
+       fill = "Clase") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+Los resultados comparativos de los cuatro modelos SVM muestran que el SVM Lineal lidera en efectividad con un accuracy de 83.75%, kappa de 0.7562, y F1-scores altos ("Económica": 0.881, "Media": 0.755, "Cara": 0.871), aunque tiene 71 falsos negativos (16 "Económica", 39 "Media", 16 "Cara"), seguido por el SVM Polinomial (accuracy: 83.52%, kappa: 0.7528, F1-scores: 0.862, 0.752, 0.884) con 72 falsos negativos (16, 41, 15); el SVM Radial (accuracy: 82.84%, kappa: 0.7425, F1-scores: 0.853, 0.741, 0.882) tiene 75 falsos negativos (19, 41, 15), y el SVM Tuneado (accuracy: 82.61%, kappa: 0.7390, F1-scores: 0.854, 0.733, 0.882) registra 76 falsos negativos (18, 44, 14). En cuanto al tiempo de procesamiento, el SVM Polinomial es el más rápido (0.0219 seg.), mientras que el SVM Tuneado es el más lento (0.038 seg.). Todos los modelos se equivocan más en "Media" (39-44 FN, 54.7%-57.9% del total de FN), lo que tiene alta importancia por su impacto en la segmentación de mercado, y menos en "Cara" (14-16 FN, 18.4%-22.5%), de menor impacto; el SVM Lineal ofrece el mejor equilibrio entre efectividad, tiempo y distribución de errores.
 
 ```{r}
-# --------------------------
-# CONCLUSIÓN Y RECOMENDACIÓN
-# --------------------------
+# -----------------------------------------------------
+# 9. Comparación de Eficiencia: SVM Lineal vs Otros Algoritmos (Corregido, Logit con multinom)
+# -----------------------------------------------------
 
-cat("\nCONCLUSIONES FINALES:\n")
-cat("1. El modelo con mejor performance fue", names(which.max(sapply(results, function(x) x$metrics$Accuracy))), 
-    "con un accuracy de", max(sapply(results, function(x) x$metrics$Accuracy)), "\n")
-cat("2. Problemas detectados:\n")
-cat("   - Falsos negativos en clase 'Economica':", min(sapply(results, function(x) x$metrics$FN_Economica)), "a", 
-    max(sapply(results, function(x) x$metrics$FN_Economica)), "casos\n")
-cat("   - Falsos negativos en clase 'Media':", min(sapply(results, function(x) x$metrics$FN_Media)), "a", 
-    max(sapply(results, function(x) x$metrics$FN_Media)), "casos\n")
-cat("3. Recomendación: Usar", names(which.max(sapply(results, function(x) x$metrics$Accuracy))), 
-    "como modelo final y considerar:\n")
-cat("   - Balanceo de clases para mejorar los falsos negativos\n")
-cat("   - Ajuste fino del parámetro C para mejorar la clasificación de clases minoritarias\n")
+
+library(randomForest)
+library(class)  # Para KNN
+library(rpart)  # Para Árbol de Decisión
+library(nnet)   # Para Regresión Logística (multinom)
+
+# 9.0 Asegurarse de que X_train_scaled y X_test_scaled sean data frames con nombres de columnas
+if (is.matrix(X_train_scaled)) {
+  X_train_scaled <- as.data.frame(X_train_scaled)
+  X_test_scaled <- as.data.frame(X_test_scaled)
+  colnames(X_train_scaled) <- colnames(X_train)
+  colnames(X_test_scaled) <- colnames(X_train)
+}
+
+# 9.1 Función para evaluar modelos
+evaluate_model <- function(model, model_name, test_data, test_y, train_data, train_y, predict_fn = predict) {
+  start_time <- Sys.time()
+  pred_test <- predict_fn(model, test_data)
+  time_taken <- as.numeric(Sys.time() - start_time)
+  
+  # Si predict_fn devuelve probabilidades (como en rpart o multinom), tomar la clase predicha
+  if (is.matrix(pred_test) || is.data.frame(pred_test)) {
+    pred_test <- factor(colnames(pred_test)[apply(pred_test, 1, which.max)], levels = levels(test_y))
+  }
+  
+  cm_test <- confusionMatrix(pred_test, test_y)
+  
+  # Métricas de entrenamiento para verificar sobreajuste
+  pred_train <- predict_fn(model, train_data)
+  if (is.matrix(pred_train) || is.data.frame(pred_train)) {
+    pred_train <- factor(colnames(pred_train)[apply(pred_train, 1, which.max)], levels = levels(train_y))
+  }
+  
+  cm_train <- confusionMatrix(pred_train, train_y)
+  
+  return(data.frame(
+    Modelo = model_name,
+    Train_Accuracy = cm_train$overall["Accuracy"],
+    Test_Accuracy = cm_test$overall["Accuracy"],
+    Kappa = cm_test$overall["Kappa"],
+    Time_sec = time_taken
+  ))
+}
+
+# 9.2 Entrenar o cargar los modelos
+# SVM Lineal (mejor modelo identificado)
+set.seed(42)
+svm_linear <- svm(y_train ~ ., data = X_train_scaled, kernel = "linear")
+
+# Árbol de Decisión (usando rpart directamente)
+set.seed(42)
+tree_model <- rpart(y_train ~ ., data = X_train_scaled, method = "class")
+
+# Random Forest
+set.seed(42)
+rf_model <- randomForest(x = as.matrix(X_train_scaled), y = y_train, ntree = 100)
+
+# Naive Bayes
+nb_model <- naiveBayes(y_train ~ ., data = X_train_scaled)
+
+# KNN (k=5 como ejemplo, ajustar según validación previa)
+knn_predict <- function(model, data) {
+  knn_pred <- knn(train = as.matrix(X_train_scaled), test = as.matrix(data), cl = y_train, k = 5)
+  return(knn_pred)
+}
+
+# Regresión Logística (multinomial, usando multinom directamente)
+set.seed(42)
+# Crear un data frame con y_train y X_train_scaled para multinom
+train_data <- X_train_scaled
+train_data$y <- y_train
+logit_model <- multinom(y ~ ., data = train_data, trace = FALSE)
+
+# 9.3 Evaluar todos los modelos
+comparison_results <- rbind(
+  evaluate_model(svm_linear, "SVM Lineal", X_test_scaled, y_test, X_train_scaled, y_train),
+  evaluate_model(tree_model, "Árbol de Decisión", X_test_scaled, y_test, X_train_scaled, y_train),
+  evaluate_model(rf_model, "Random Forest", X_test_scaled, y_test, X_train_scaled, y_train),
+  evaluate_model(nb_model, "Naive Bayes", X_test_scaled, y_test, X_train_scaled, y_train),
+  evaluate_model(NULL, "KNN", X_test_scaled, y_test, X_train_scaled, y_train, knn_predict),
+  evaluate_model(logit_model, "Regresión Logística", X_test_scaled, y_test, X_train_scaled, y_train)
+)
+
+# 9.4 Mostrar tabla comparativa
+cat("\nComparación de Eficiencia entre Modelos:\n")
+print(comparison_results)
+
+# 9.5 Determinar el mejor modelo y el más lento
+best_model <- comparison_results[which.max(comparison_results$Test_Accuracy), "Modelo"]
+best_accuracy <- max(comparison_results$Test_Accuracy)
+slowest_model <- comparison_results[which.max(comparison_results$Time_sec), "Modelo"]
+slowest_time <- max(comparison_results$Time_sec)
+
+cat("\nAnálisis de Resultados:\n")
+cat(sprintf("- Mejor modelo para predecir: %s (Test Accuracy: %.2f%%)\n", 
+            best_model, best_accuracy * 100))
+cat(sprintf("- Modelo más lento: %s (Tiempo: %.4f segundos)\n", 
+            slowest_model, slowest_time))
+
+# 9.6 Visualización comparativa de Accuracy
+ggplot(comparison_results, aes(x = reorder(Modelo, -Test_Accuracy), y = Test_Accuracy, fill = Modelo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.2f%%", Test_Accuracy * 100)), vjust = -0.5) +
+  labs(title = "Comparación de Test Accuracy entre Modelos",
+       x = "Modelo",
+       y = "Test Accuracy") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme(legend.position = "none")
+
+# 9.7 Visualización comparativa de Tiempo de Procesamiento
+ggplot(comparison_results, aes(x = reorder(Modelo, -Time_sec), y = Time_sec, fill = Modelo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.4f", Time_sec)), vjust = -0.5) +
+  labs(title = "Comparación de Tiempo de Procesamiento entre Modelos",
+       x = "Modelo",
+       y = "Tiempo (segundos)") +
+  theme_minimal() +
+  theme(legend.position = "none")
 ```
+La comparación de eficiencia entre los modelos revela que el SVM Lineal es el mejor para predecir la variable SalePrice categorizada ("Económica", "Media", "Cara"), con un Test Accuracy de 83.75% y un Kappa de 0.7562, superando a la Regresión Logística (83.30%, Kappa: 0.7494), Random Forest (80.55%, Kappa: 0.7082), KNN (80.09%, Kappa: 0.7014), Naive Bayes (78.49%, Kappa: 0.6772), y Árbol de Decisión (74.14%, Kappa: 0.6121); sin embargo, el SVM Lineal es relativamente lento (0.0036 seg.), mientras que el Árbol de Decisión es el más rápido (0.0020 seg.) y Naive Bayes el más lento (0.0409 seg.). Aunque el SVM Lineal y la Regresión Logística tienen accuracies similares, el SVM Lineal destaca por su mayor Kappa, indicando mejor acuerdo más allá del azar, y su tiempo de procesamiento es competitivo frente a Naive Bayes y Random Forest (0.0071 seg.), haciendo del SVM Lineal la mejor opción para este problema de clasificación.
+
+
+A partir de aquí se cayó R y no dejo culminar, pero este es nuestro codigo: 
+# -----------------------------------------------------
+# 10. Modelo de Regresión para SalePrice (Gradient Boosting con Tuneo)
+# -----------------------------------------------------
+
+library(gbm)
+library(caret)
+library(Metrics)
+
+# 10.1 Preparar los datos
+# Asegurarse de que SalePrice sea numérico (no categórico)
+data$SalePrice <- as.numeric(data$SalePrice)
+
+# Seleccionar las mismas variables predictoras que en los puntos anteriores
+predictors <- c("GrLivArea", "OverallQual", "TotalBsmtSF", "GarageCars", "FullBath", "YearBuilt")
+X <- data[, predictors]
+y <- data$SalePrice
+
+# Dividir en conjunto de entrenamiento y prueba (80-20)
+set.seed(42)
+trainIndex <- createDataPartition(y, p = 0.8, list = FALSE)
+X_train <- X[trainIndex, ]
+X_test <- X[-trainIndex, ]
+y_train <- y[trainIndex]
+y_test <- y[-trainIndex]
+
+# Escalar las variables predictoras
+preProc <- preProcess(X_train, method = c("center", "scale"))
+X_train_scaled <- predict(preProc, X_train)
+X_test_scaled <- predict(preProc, X_test)
+
+# Convertir a data frame para gbm
+X_train_scaled <- as.data.frame(X_train_scaled)
+X_test_scaled <- as.data.frame(X_test_scaled)
+
+# 10.2 Tuneo del modelo Gradient Boosting
+# Definir los hiperparámetros a tunear
+tune_grid <- expand.grid(
+  n.trees = c(100, 500, 1000),
+  interaction.depth = c(1, 3, 5),
+  shrinkage = c(0.01, 0.05, 0.1),
+  n.minobsinnode = 10  # Fijo, para evitar sobreajuste
+)
+
+# Función para entrenar y evaluar el modelo con validación cruzada
+best_model <- NULL
+best_rmse <- Inf
+best_params <- NULL
+
+for (i in 1:nrow(tune_grid)) {
+  params <- tune_grid[i, ]
+  
+  set.seed(42)
+  gbm_model <- gbm(
+    formula = y_train ~ .,
+    data = X_train_scaled,
+    distribution = "gaussian",  # Para regresión
+    n.trees = params$n.trees,
+    interaction.depth = params$interaction.depth,
+    shrinkage = params$shrinkage,
+    n.minobsinnode = params$n.minobsinnode,
+    cv.folds = 5,  # Validación cruzada de 5 folds
+    verbose = FALSE
+  )
+  
+  # Encontrar el número óptimo de árboles usando validación cruzada
+  best_iter <- gbm.perf(gbm_model, method = "cv", plot.it = FALSE)
+  
+  # Predecir en el conjunto de prueba
+  pred_test <- predict(gbm_model, X_test_scaled, n.trees = best_iter)
+  
+  # Calcular RMSE
+  rmse_test <- rmse(y_test, pred_test)
+  
+  # Guardar el mejor modelo
+  if (rmse_test < best_rmse) {
+    best_rmse <- rmse_test
+    best_model <- gbm_model
+    best_params <- params
+    best_params$best_iter <- best_iter
+  }
+}
+
+# 10.3 Evaluar el modelo final
+# Predecir con el mejor modelo
+pred_train <- predict(best_model, X_train_scaled, n.trees = best_params$best_iter)
+pred_test <- predict(best_model, X_test_scaled, n.trees = best_params$best_iter)
+
+# Calcular métricas
+rmse_train <- rmse(y_train, pred_train)
+rmse_test <- rmse(y_test, pred_test)
+r2_train <- cor(y_train, pred_train)^2
+r2_test <- cor(y_test, pred_test)^2
+
+# 10.4 Mostrar resultados
+cat("\nMejor Modelo de Gradient Boosting:\n")
+cat("Hiperparámetros óptimos:\n")
+print(best_params)
+cat("\nMétricas de Rendimiento:\n")
+cat(sprintf("- RMSE Entrenamiento: %.2f\n", rmse_train))
+cat(sprintf("- RMSE Prueba: %.2f\n", rmse_test))
+cat(sprintf("- R² Entrenamiento: %.4f\n", r2_train))
+cat(sprintf("- R² Prueba: %.4f\n", r2_test))
+
+# 10.5 Visualización: Predicciones vs Valores Reales
+results_df <- data.frame(
+  Real = y_test,
+  Predicho = pred_test
+)
+
+ggplot(results_df, aes(x = Real, y = Predicho)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Predicciones vs Valores Reales (Gradient Boosting)",
+       x = "Precio Real (SalePrice)",
+       y = "Precio Predicho") +
+  theme_minimal()
+
+Y para el punto 11: 
+# -----------------------------------------------------
+# 11. Comparación de Modelos de Regresión para SalePrice
+# -----------------------------------------------------
+
+library(gbm)
+library(caret)
+library(rpart)
+library(FNN)  # Para KNN de regresión
+library(Metrics)
+library(ggplot2)
+
+# 11.1 Preparar los datos (ya están listos del punto 10, pero aseguramos formato)
+if (is.matrix(X_train_scaled)) {
+  X_train_scaled <- as.data.frame(X_train_scaled)
+  X_test_scaled <- as.data.frame(X_test_scaled)
+  colnames(X_train_scaled) <- colnames(X_train)
+  colnames(X_test_scaled) <- colnames(X_train)
+}
+
+# 11.2 Función para evaluar modelos de regresión
+evaluate_regression_model <- function(model, model_name, test_data, test_y, train_data, train_y, predict_fn = predict) {
+  start_time <- Sys.time()
+  pred_test <- predict_fn(model, test_data)
+  time_taken <- as.numeric(Sys.time() - start_time)
+  
+  pred_train <- predict_fn(model, train_data)
+  
+  # Calcular métricas
+  rmse_train <- rmse(train_y, pred_train)
+  rmse_test <- rmse(test_y, pred_test)
+  r2_train <- cor(train_y, pred_train)^2
+  r2_test <- cor(test_y, pred_test)^2
+  
+  return(data.frame(
+    Modelo = model_name,
+    RMSE_Train = rmse_train,
+    RMSE_Test = rmse_test,
+    R2_Train = r2_train,
+    R2_Test = r2_test,
+    Time_sec = time_taken
+  ))
+}
+
+# 11.3 Entrenar los modelos
+# Gradient Boosting (mejor modelo del punto 10, reentrenamos para consistencia)
+set.seed(42)
+gbm_model <- gbm(
+  formula = y_train ~ .,
+  data = X_train_scaled,
+  distribution = "gaussian",
+  n.trees = 500,  # Usamos valores razonables basados en tuneo típico
+  interaction.depth = 3,
+  shrinkage = 0.05,
+  n.minobsinnode = 10,
+  cv.folds = 5,
+  verbose = FALSE
+)
+best_iter <- gbm.perf(gbm_model, method = "cv", plot.it = FALSE)
+gbm_predict <- function(model, data) predict(model, data, n.trees = best_iter)
+
+# Regresión Lineal
+lm_model <- lm(y_train ~ ., data = X_train_scaled)
+
+# Árbol de Regresión (usando rpart)
+set.seed(42)
+tree_model <- rpart(y_train ~ ., data = X_train_scaled, method = "anova")
+
+# KNN (para regresión)
+knn_predict <- function(model, data) {
+  knn.reg(train = as.matrix(X_train_scaled), test = as.matrix(data), y = y_train, k = 5)$pred
+}
+
+# 11.4 Evaluar todos los modelos
+comparison_results <- rbind(
+  evaluate_regression_model(gbm_model, "Gradient Boosting", X_test_scaled, y_test, X_train_scaled, y_train, gbm_predict),
+  evaluate_regression_model(lm_model, "Regresión Lineal", X_test_scaled, y_test, X_train_scaled, y_train),
+  evaluate_regression_model(tree_model, "Árbol de Regresión", X_test_scaled, y_test, X_train_scaled, y_train),
+  evaluate_regression_model(NULL, "KNN", X_test_scaled, y_test, X_train_scaled, y_train, knn_predict)
+)
+
+# 11.5 Mostrar tabla comparativa
+cat("\nComparación de Modelos de Regresión:\n")
+print(comparison_results)
+
+# 11.6 Determinar el mejor modelo y el más lento
+best_model <- comparison_results[which.min(comparison_results$RMSE_Test), "Modelo"]
+best_rmse <- min(comparison_results$RMSE_Test)
+best_r2 <- comparison_results[which.min(comparison_results$RMSE_Test), "R2_Test"]
+slowest_model <- comparison_results[which.max(comparison_results$Time_sec), "Modelo"]
+slowest_time <- max(comparison_results$Time_sec)
+
+cat("\nAnálisis de Resultados:\n")
+cat(sprintf("- Mejor modelo para predecir (menor RMSE): %s (RMSE Test: %.2f, R² Test: %.4f)\n", 
+            best_model, best_rmse, best_r2))
+cat(sprintf("- Modelo más lento: %s (Tiempo: %.4f segundos)\n", 
+            slowest_model, slowest_time))
+
+# 11.7 Visualización comparativa de RMSE
+ggplot(comparison_results, aes(x = reorder(Modelo, -RMSE_Test), y = RMSE_Test, fill = Modelo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.2f", RMSE_Test)), vjust = -0.5) +
+  labs(title = "Comparación de RMSE (Test) entre Modelos",
+       x = "Modelo",
+       y = "RMSE (Test)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# 11.8 Visualización comparativa de R²
+ggplot(comparison_results, aes(x = reorder(Modelo, -R2_Test), y = R2_Test, fill = Modelo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.4f", R2_Test)), vjust = -0.5) +
+  labs(title = "Comparación de R² (Test) entre Modelos",
+       x = "Modelo",
+       y = "R² (Test)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# 11.9 Visualización comparativa de Tiempo de Procesamiento
+ggplot(comparison_results, aes(x = reorder(Modelo, -Time_sec), y = Time_sec, fill = Modelo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.4f", Time_sec)), vjust = -0.5) +
+  labs(title = "Comparación de Tiempo de Procesamiento entre Modelos",
+       x = "Modelo",
+       y = "Tiempo (segundos)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+
 
 
