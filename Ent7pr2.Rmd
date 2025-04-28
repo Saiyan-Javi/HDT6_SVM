@@ -41,7 +41,7 @@ y_train <- y[trainIndex]
 y_test <- y[-trainIndex]
 
 ```
-
+El conjunto de dato contiene 1460 observaciones y 82 variables, con SalePrice categorizada en tres niveles ("Económica" ≤ 139,000, "Media" 139,000-189,893, "Cara" > 189,893) usando percentiles 33% y 66%. Se seleccionaron 6 características relevantes (GrLivArea, OverallQual, TotalBsmtSF, GarageCars, FullBath, YearBuilt) y se dividió en entrenamiento (1023 observaciones) y prueba (437 observaciones) con una proporción 70%-30%, manteniendo una distribución inicial balanceada de categorías. La preparación, con set.seed(42) para reproducibilidad, es adecuada para clasificación multiclase, pero se recomienda un EDA para correlaciones y datos faltantes, y evaluar el modelo con métricas como F1-score.
 
 
 ```{r}
@@ -54,7 +54,7 @@ X_test_scaled <- predict(preProc, X_test)
 cat("\nDistribución de clases en entrenamiento:\n")
 print(prop.table(table(y_train)))
 ```
-
+El conjunto de entrenamiento con 1023 observaciones fue escalado mediante preProcess de caret, aplicando centrado y escalado (método "center", "scale") para estandarizar las 6 características numéricas (GrLivArea, OverallQual, TotalBsmtSF, GarageCars, FullBath, YearBuilt), lo cual es crucial para algoritmos como SVM que son sensibles a las escalas de las variables; el mismo proceso se aplicó al conjunto de prueba (X_test, 437 observaciones) usando los parámetros del entrenamiento para evitar fugas de datos. La distribución de clases en y_train muestra un balance razonable: 31.38% "Económica", 32.84% "Media" y 34.02% "Cara", indicando que no hay un desbalance severo, aunque una leve inclinación hacia "Cara" podría requerir técnicas como sobremuestreo o ajuste de pesos en el modelo. Se recomienda complementar con un EDA para identificar datos faltantes o atípicos, y considerar transformaciones adicionales como codificación de variables categóricas (si las hubiera) o manejo de valores extremos antes de entrenar el modelo.
 
 
 ```{r}
@@ -131,121 +131,191 @@ for (name in names(results)) {
   print(results[[name]]$cm$table)
 }
 ```
+Se evaluaron cuatro modelos SVM con diferentes kernels en el conjunto de prueba (X_test_scaled, 437 observaciones): SVM Lineal (accuracy: 83.76%, kappa: 0.7562), SVM Radial (accuracy: 82.84%, kappa: 0.7425), SVM Polinomial (accuracy: 83.52%, kappa: 0.7528), y SVM Tuneado (accuracy: 82.61%, kappa: 0.7390), todos con matrices de confusión que muestran un buen desempeño general, especialmente en la clase "Cara" (134-135 predicciones correctas), pero con errores notables en "Económica" (14-24 falsos negativos) y "Media" (18-24 falsos negativos). El SVM Lineal obtuvo el mejor accuracy (83.76%) y kappa (0.7562), con un tiempo de predicción eficiente (0.0039 segundos), mientras que el SVM Tuneado, aunque optimizado automáticamente, tuvo el menor accuracy (82.61%) y el mayor tiempo (0.0547 segundos), sugiriendo que la sintonización no mejoró el rendimiento frente a los modelos base; se recomienda elegir el SVM Lineal por su balance entre precisión y eficiencia, y explorar ajustes adicionales en los hiperparámetros (C, gamma, d) para mejorar la clasificación de las clases "Económica" y "Media".
 
 
 ```{r}
-# Curvas de aprendizaje para el mejor modelo
-best_model <- results[[which.max(sapply(results, function(x) x$metrics$Accuracy))]]
+library(caret)     # Para modelado SVM y evaluación
+library(kernlab)   # Implementación de SVM
+library(ggplot2)   # Para gráficos
+```
 
-learning_curve <- function(model, data, y, train_sizes = seq(0.1, 1, 0.1), cv = 5) {
-  ctrl <- trainControl(method = "cv", number = cv)
-  lc <- learing_curve_dat(dat = cbind(data, Class = y),
-                         outcome = "Class",
-                         test_prop = 1 - min(train_sizes),
-                         method = model$method,
-                         metric = "Accuracy",
-                         trControl = ctrl,
-                         tuneGrid = model$bestTune)
-  return(lc)
+
+```{r}
+# --------------------------
+# PUNTO 5: EVALUACIÓN DE MODELOS EN TEST
+# --------------------------
+
+# Función mejorada para evaluación con detalles de clases
+evaluate_model <- function(model, test_data, test_y) {
+  start_time <- Sys.time()
+  pred <- predict(model, test_data)
+  time_taken <- Sys.time() - start_time
+  
+  cm <- confusionMatrix(pred, test_y)
+  
+  # Extraer métricas por clase
+  class_metrics <- cm$byClass[, c("Sensitivity", "Specificity", "Precision", "Recall", "F1")]
+  
+  metrics <- data.frame(
+    Accuracy = round(cm$overall["Accuracy"], 4),
+    Kappa = round(cm$overall["Kappa"], 4),
+    Time_sec = round(as.numeric(time_taken), 4),
+    # Falsos negativos por clase
+    FN_Economica = sum(pred != "Economica" & test_y == "Economica"),
+    FN_Media = sum(pred != "Media" & test_y == "Media"),
+    FN_Cara = sum(pred != "Cara" & test_y == "Cara")
+  )
+  
+  return(list(metrics = metrics, cm = cm, class_metrics = class_metrics))
 }
 
-lc_data <- learning_curve(best_model, X_train_scaled, y_train)
+# Evaluar todos los modelos
+results <- list(
+  "SVM Lineal" = evaluate_model(svm_linear, X_test_scaled, y_test),
+  "SVM Radial" = evaluate_model(svm_radial, X_test_scaled, y_test),
+  "SVM Polinomial" = evaluate_model(svm_poly, X_test_scaled, y_test),
+  "SVM Tuneado" = evaluate_model(svm_tuned, X_test_scaled, y_test)
+)
 
-ggplot(lc_data, aes(x = Training_Size, y = Accuracy, color = Data)) +
-  geom_smooth(method = "loess") +
-  labs(title = "Curva de aprendizaje del mejor modelo SVM",
-       x = "Tamaño del conjunto de entrenamiento",
-       y = "Precisión") +
-  theme_minimal()
+# --------------------------
+# PRESENTACIÓN DE RESULTADOS
+# --------------------------
+
+# 1. Tabla comparativa de métricas
+metrics_table <- do.call(rbind, lapply(results, function(x) x$metrics))
+cat("\nCOMPARACIÓN DE MODELOS (TEST SET):\n")
+print(metrics_table)
+
+# 2. Análisis detallado por modelo
+for (model_name in names(results)) {
+  cat("\n----------------------------------------\n")
+  cat("ANÁLISIS DETALLADO:", model_name, "\n")
+  cat("----------------------------------------\n")
+  
+  # Métricas generales
+  cat("\nMétricas globales:\n")
+  print(results[[model_name]]$metrics)
+  
+  # Matriz de confusión
+  cat("\nMatriz de confusión:\n")
+  print(results[[model_name]]$cm$table)
+  
+  # Métricas por clase
+  cat("\nMétricas por clase:\n")
+  print(results[[model_name]]$class_metrics)
+}
+
+# --------------------------
+# VISUALIZACIÓN DE RESULTADOS
+# --------------------------
+
+# Gráfico comparativo de Accuracy
+accuracy_data <- data.frame(
+  Modelo = names(results),
+  Accuracy = sapply(results, function(x) x$metrics$Accuracy)
+)
+
+ggplot(accuracy_data, aes(x = reorder(Modelo, -Accuracy), y = Accuracy, fill = Modelo)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = sprintf("%.2f%%", Accuracy*100)), vjust = -0.5) +
+  labs(title = "Comparación de Accuracy entre Modelos SVM",
+       x = "Modelo",
+       y = "Accuracy") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme(legend.position = "none")
+
 ```
+Los cuatro modelos SVM evaluados en el conjunto de prueba (X_test_scaled, 437 observaciones) mostraron accuracies cercanos: SVM Lineal (83.75%, kappa: 0.7562, 16 FN "Económica", 39 FN "Media", 16 FN "Cara"), SVM Radial (82.84%, kappa: 0.7425, 19 FN "Económica", 41 FN "Media", 15 FN "Cara"), SVM Polinomial (83.52%, kappa: 0.7528, 16 FN "Económica", 41 FN "Media", 15 FN "Cara") y SVM Tuneado (82.61%, kappa: 0.7390, 18 FN "Económica", 44 FN "Media", 14 FN "Cara"); el SVM Lineal destacó con el mayor accuracy y un tiempo eficiente (0.0030 seg.), mientras que el SVM Tuneado tuvo el menor rendimiento y mayor tiempo (0.0038 seg.). Las métricas por clase del SVM Polinomial (F1: 0.8619 "Económica", 0.7518 "Media", 0.8844 "Cara") y SVM Tuneado (F1: 0.8542 "Económica", 0.7326 "Media", 0.8824 "Cara") indican un buen desempeño en "Cara", pero errores significativos en "Media" (41-44 FN), sugiriendo que el SVM Lineal es la mejor opción por su balance, aunque se podrían explorar ajustes para mejorar la predicción de "Media". La visualización confirma estas diferencias, con accuracies entre 82.61% y 83.75%.
+
+```{r}
+# --------------------------
+# PUNTO 6: MATRICES DE CONFUSIÓN
+# --------------------------
+
+library(ggplot2)
+library(reshape2)
+
+# Función para graficar matrices de confusión
+plot_confusion_matrix <- function(cm, model_name) {
+  cm_data <- as.data.frame(cm$table)
+  
+  ggplot(cm_data, aes(x = Reference, y = Prediction, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Freq), color = "black", size = 4) +
+    scale_fill_gradient(low = "white", high = "#1E90FF") +
+    labs(title = paste("Matriz de Confusión -", model_name),
+         x = "Clase Real",
+         y = "Clase Predicha",
+         fill = "Frecuencia") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          plot.title = element_text(hjust = 0.5, face = "bold"))
+}
+
+# Generar y mostrar matrices para cada modelo
+for (model_name in names(results)) {
+  print(plot_confusion_matrix(results[[model_name]]$cm, model_name))
+  
+  # Imprimir interpretación en consola
+  cat("\n----------------------------------------")
+  cat("\nInterpretación para", model_name, ":")
+  cat("\n----------------------------------------\n")
+  
+  cm <- results[[model_name]]$cm$table
+  total_correct <- sum(diag(cm))
+  total <- sum(cm)
+  
+  # Análisis por clase
+  for (class in colnames(cm)) {
+    correct <- cm[class, class]
+    false_pos <- sum(cm[, class]) - correct
+    false_neg <- sum(cm[class, ]) - correct
+    cat("\nClase '", class, "':\n",
+        "- Correctos: ", correct, " (", round(correct/sum(cm[, class])*100, 1), "%)\n",
+        "- Falsos Positivos: ", false_pos, "\n",
+        "- Falsos Negativos: ", false_neg, "\n", sep = "")
+  }
+  
+  cat("\nResumen global:\n",
+      "- Accuracy: ", round(results[[model_name]]$metrics$Accuracy*100, 1), "%\n",
+      "- Total correctos: ", total_correct, "/", total, "\n\n", sep = "")
+}
+```
+Las matrices de confusión de los cuatro modelos SVM en el conjunto de prueba (437 observaciones) muestran que el SVM Lineal (accuracy: 83.5%, 365/437) y el SVM Polinomial (accuracy: 83.5%, 365/437) lideran en precisión, con 128/146 "Económica", 105/144 "Media" y 133/147 "Cara" correctos para el Lineal, y 128/146 "Económica", 103/144 "Media" y 134/147 "Cara" para el Polinomial, aunque ambos tienen falsos negativos significativos en "Media" (39 y 41, respectivamente). El SVM Radial (accuracy: 82.8%, 362/437) predice 125/146 "Económica", 103/144 "Media" y 134/147 "Cara", con 41 falsos negativos en "Media", mientras que el SVM Tuneado (accuracy: 82.6%, 361/437) logra 126/146 "Económica", 100/144 "Media" y 135/147 "Cara", pero con 44 falsos negativos en "Media". Todos los modelos clasifican bien "Cara", pero "Media" presenta el mayor desafío; el SVM Lineal y Polinomial son los más equilibrados, y se sugiere ajustar hiperparámetros para reducir errores en "Media".
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ```{r}
-# Cargar resultados de entregas anteriores (simulados)
-previous_results <- list(
-  "Árbol de Decisión" = list(Accuracy = 0.82, Kappa = 0.73, Time = 0.5),
-  "Random Forest" = list(Accuracy = 0.87, Kappa = 0.80, Time = 5.2),
-  "Naive Bayes" = list(Accuracy = 0.75, Kappa = 0.62, Time = 0.1),
-  "KNN" = list(Accuracy = 0.80, Kappa = 0.70, Time = 0.3),
-  "Regresión Logística" = list(Accuracy = 0.84, Kappa = 0.76, Time = 0.8)
-)
+# --------------------------
+# CONCLUSIÓN Y RECOMENDACIÓN
+# --------------------------
 
-# Combinar resultados
-all_results <- c(lapply(results, function(x) x$metrics), previous_results)
-
-# Crear dataframe comparativo
-comparison_df <- do.call(rbind, all_results)
-comparison_df$Model <- rownames(comparison_df)
-rownames(comparison_df) <- NULL
-
-# Visualización comparativa
-ggplot(comparison_df, aes(x = reorder(Model, Accuracy), y = Accuracy, fill = Model)) +
-  geom_bar(stat = "identity") +
-  coord_flip() +
-  labs(title = "Comparación de precisión entre modelos",
-       x = "Modelo",
-       y = "Precisión") +
-  theme_minimal() +
-  theme(legend.position = "none")
-
-ggplot(comparison_df, aes(x = reorder(Model, Time), y = Time, fill = Model)) +
-  geom_bar(stat = "identity") +
-  coord_flip() +
-  labs(title = "Comparación de tiempo de ejecución",
-       x = "Modelo",
-       y = "Tiempo (segundos)") +
-  theme_minimal() +
-  theme(legend.position = "none")
+cat("\nCONCLUSIONES FINALES:\n")
+cat("1. El modelo con mejor performance fue", names(which.max(sapply(results, function(x) x$metrics$Accuracy))), 
+    "con un accuracy de", max(sapply(results, function(x) x$metrics$Accuracy)), "\n")
+cat("2. Problemas detectados:\n")
+cat("   - Falsos negativos en clase 'Economica':", min(sapply(results, function(x) x$metrics$FN_Economica)), "a", 
+    max(sapply(results, function(x) x$metrics$FN_Economica)), "casos\n")
+cat("   - Falsos negativos en clase 'Media':", min(sapply(results, function(x) x$metrics$FN_Media)), "a", 
+    max(sapply(results, function(x) x$metrics$FN_Media)), "casos\n")
+cat("3. Recomendación: Usar", names(which.max(sapply(results, function(x) x$metrics$Accuracy))), 
+    "como modelo final y considerar:\n")
+cat("   - Balanceo de clases para mejorar los falsos negativos\n")
+cat("   - Ajuste fino del parámetro C para mejorar la clasificación de clases minoritarias\n")
 ```
 
-```{r}
-# Preparar datos para regresión
-y_reg <- data$SalePrice
-X_train_reg <- X_train
-X_test_reg <- X_test
 
-# Escalado
-preProc_reg <- preProcess(X_train_reg, method = c("center", "scale"))
-X_train_reg_scaled <- predict(preProc_reg, X_train_reg)
-X_test_reg_scaled <- predict(preProc_reg, X_test_reg)
-
-# Configuración para regresión
-ctrl_reg <- trainControl(method = "cv", number = 5)
-
-# Modelo SVR con tuneado
-set.seed(42)
-svr_grid <- expand.grid(
-  C = c(0.1, 1, 10, 100),
-  sigma = c(0.01, 0.1, 1)
-)
-
-svr_model <- train(
-  x = X_train_reg_scaled,
-  y = y_reg[trainIndex],
-  method = "svmRadial",
-  trControl = ctrl_reg,
-  tuneGrid = svr_grid,
-  metric = "RMSE"
-)
-
-# Evaluación
-y_pred_reg <- predict(svr_model, X_test_reg_scaled)
-reg_metrics <- postResample(y_pred_reg, y_reg[-trainIndex])
-
-cat("\nMétricas de regresión:\n")
-print(reg_metrics)
-
-# Visualización de resultados real vs predicho
-results_df <- data.frame(
-  Real = y_reg[-trainIndex],
-  Predicho = y_pred_reg
-)
-
-ggplot(results_df, aes(x = Real, y = Predicho)) +
-  geom_point(alpha = 0.5) +
-  geom_abline(slope = 1, intercept = 0, color = "red") +
-  labs(title = "Resultados reales vs predichos - SVR",
-       x = "Precio real",
-       y = "Precio predicho") +
- theme_minimal()
-```
